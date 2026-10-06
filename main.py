@@ -1,4 +1,5 @@
 import os
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
@@ -6,59 +7,71 @@ from openai import OpenAI
 app = Flask(__name__)
 CORS(app)
 
+# Hugging Face token
+HF_TOKEN = os.environ.get("HF_TOKEN")
+
+if not HF_TOKEN:
+    raise RuntimeError("HF_TOKEN is missing from Render Environment Variables")
+
+# Hugging Face OpenAI-compatible API
 client = OpenAI(
-    api_key=os.environ["OPENAI_API_KEY"]
+    base_url="https://router.huggingface.co/v1",
+    api_key=HF_TOKEN
 )
+
 
 @app.get("/")
 def home():
     return "JARVIS Server is Online!"
 
+
 @app.get("/health")
 def health():
     return jsonify({
-        "status": "online",
-        "assistant": "JARVIS"
+        "status": "ok"
     })
+
 
 @app.post("/ask")
 def ask():
-
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
     question = data.get("question", "").strip()
 
     if not question:
         return jsonify({
-            "error": "No question received"
+            "error": "No question provided"
         }), 400
 
-    response = client.responses.create(
-        model="gpt-5.5",
-        instructions="""
-        You are JARVIS, a helpful AI assistant.
+    try:
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b:fastest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are JARVIS, a helpful voice assistant. "
+                        "Give short, clear and useful answers."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": question
+                }
+            ],
+            max_tokens=150
+        )
 
-        Give clear and reasonably short answers
-        because your answers will be spoken aloud.
+        answer = response.choices[0].message.content
 
-        You are being used for a Class 12
-        school project.
-        """,
-        input=question
-    )
+        return jsonify({
+            "answer": answer
+        })
 
-    return jsonify({
-        "answer": response.output_text
-    })
+    except Exception as e:
+        print("AI ERROR:", repr(e))
 
-
-if __name__ == "__main__":
-
-    port = int(
-        os.environ.get("PORT", 8080)
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+        return jsonify({
+            "error": "AI request failed",
+            "details": str(e)
+        }), 500
