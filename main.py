@@ -1,22 +1,14 @@
 import os
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from openai import OpenAI
+from google import genai
 
 app = Flask(__name__)
 CORS(app)
 
-# Hugging Face token
-HF_TOKEN = os.environ.get("HF_TOKEN")
-
-if not HF_TOKEN:
-    raise RuntimeError("HF_TOKEN is missing from Render Environment Variables")
-
-# Hugging Face OpenAI-compatible API
-client = OpenAI(
-    base_url="https://router.huggingface.co/v1",
-    api_key=HF_TOKEN
+# Gemini API
+client = genai.Client(
+    api_key=os.environ["GEMINI_API_KEY"]
 )
 
 
@@ -28,50 +20,42 @@ def home():
 @app.get("/health")
 def health():
     return jsonify({
-        "status": "ok"
+        "status": "ok",
+        "message": "JARVIS Server is healthy"
     })
 
 
-@app.post("/ask")
-def ask():
-    data = request.get_json(silent=True) or {}
-
-    question = data.get("question", "").strip()
-
-    if not question:
-        return jsonify({
-            "error": "No question provided"
-        }), 400
-
+@app.post("/chat")
+def chat():
     try:
-        response = client.chat.completions.create(
-            model="openai/gpt-oss-120b:fastest",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are JARVIS, a helpful voice assistant. "
-                        "Give short, clear and useful answers."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": question
-                }
-            ],
-            max_tokens=150
+        data = request.get_json()
+
+        user_message = data.get("message", "").strip()
+
+        if not user_message:
+            return jsonify({
+                "error": "Message is required"
+            }), 400
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user_message
         )
 
-        answer = response.choices[0].message.content
-
         return jsonify({
-            "answer": answer
+            "reply": response.text
         })
 
     except Exception as e:
-        print("AI ERROR:", repr(e))
+        print("Error:", e)
 
         return jsonify({
-            "error": "AI request failed",
-            "details": str(e)
+            "error": str(e)
         }), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000))
+    )
