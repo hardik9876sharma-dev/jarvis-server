@@ -1,5 +1,4 @@
 import os
-import time
 import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -13,15 +12,16 @@ CORS(app)
 raw_key = os.environ.get("GEMINI_API_KEY") or ""
 GEMINI_API_KEY = raw_key.strip().strip('"').strip("'").strip()
 
-# The AI model to use. If Google retires it in the future,
-# change only this one line.
-MODEL_NAME = "gemini-3.8-flash"
+# Models to try, in order. If the first one is busy, the server
+# automatically tries the next one. You can edit this list later.
+MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite",
+]
 
-# How many times to try when Google says "busy" (503) or "slow down" (429).
-MAX_TRIES = 2
-
-# How long to wait for Google on each try, in milliseconds (25 seconds).
-GEMINI_TIMEOUT_MS = 25000
+# How long to wait for Google on each try, in milliseconds (15 seconds).
+GEMINI_TIMEOUT_MS = 15000
 
 client = None
 if GEMINI_API_KEY:
@@ -51,6 +51,8 @@ def is_busy_error(error):
         or "429" in text
         or "timeout" in text
         or "timed out" in text
+        or "404" in text      # model not available -> try the next one
+        or "not_found" in text
     )
 
 
@@ -73,7 +75,7 @@ def health():
         "status": "ok",
         "message": "JARVIS Server is healthy",
         "gemini_configured": client is not None,
-        "model": MODEL_NAME
+        "models": MODELS
     })
 
 
@@ -92,10 +94,10 @@ def chat():
 
     last_error = None
 
-    for attempt in range(1, MAX_TRIES + 1):
+    for model_name in MODELS:
         try:
             response = client.models.generate_content(
-                model=MODEL_NAME,
+                model=model_name,
                 contents=user_message
             )
 
@@ -103,17 +105,18 @@ def chat():
             if not reply_text:
                 reply_text = "(Gemini returned an empty reply)"
 
-            return jsonify({"reply": str(reply_text)})
+            safe_print("Answered by model:", model_name)
+            return jsonify({"reply": str(reply_text), "model": model_name})
 
         except Exception as e:
             last_error = e
-            safe_print("GEMINI ERROR (try " + str(attempt) + "):", repr(e))
+            safe_print("GEMINI ERROR with " + model_name + ":", repr(e))
 
-            # Only retry if Google is busy or slow. Other errors will not fix themselves.
-            if is_busy_error(e) and attempt < MAX_TRIES:
-                time.sleep(1)
+            # If Google is busy or the model is unavailable, try the next model.
+            if is_busy_error(e):
                 continue
 
+            # Any other error (like a bad key) will not be fixed by another model.
             break
 
     if last_error is not None and is_busy_error(last_error):
