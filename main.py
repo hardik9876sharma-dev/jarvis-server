@@ -1,4 +1,5 @@
 import os
+import time
 import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -15,6 +16,9 @@ GEMINI_API_KEY = raw_key.strip().strip('"').strip("'").strip()
 # change only this one line.
 MODEL_NAME = "gemini-3.8-flash"
 
+# How many times to try when Google says "busy" (503) or "slow down" (429).
+MAX_TRIES = 3
+
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -29,6 +33,12 @@ def safe_print(*args):
         print(*args, flush=True)
     except Exception:
         print("(could not print message)", flush=True)
+
+
+def is_busy_error(error):
+    """True if Google says it is overloaded or we are sending too fast."""
+    text = repr(error)
+    return "503" in text or "UNAVAILABLE" in text or "429" in text
 
 
 # If ANY error escapes, return it as JSON instead of an HTML page.
@@ -67,22 +77,38 @@ def chat():
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=user_message
-        )
+    last_error = None
 
-        reply_text = response.text
-        if not reply_text:
-            reply_text = "(Gemini returned an empty reply)"
+    for attempt in range(1, MAX_TRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=user_message
+            )
 
-        return jsonify({"reply": str(reply_text)})
+            reply_text = response.text
+            if not reply_text:
+                reply_text = "(Gemini returned an empty reply)"
 
-    except Exception as e:
-        safe_print("GEMINI ERROR:", repr(e))
-        safe_print(traceback.format_exc())
-        return jsonify({"error": repr(e)[:500]}), 500
+            return jsonify({"reply": str(reply_text)})
+
+        except Exception as e:
+            last_error = e
+            safe_print("GEMINI ERROR (try " + str(attempt) + "):", repr(e))
+
+            # Only retry if Google is busy. Other errors will not fix themselves.
+            if is_busy_error(e) and attempt < MAX_TRIES:
+                time.sleep(attempt)  # wait 1 second, then 2 seconds
+                continue
+
+            break
+
+    if last_error is not None and is_busy_error(last_error):
+        return jsonify({
+            "error": "Google's AI is very busy right now. Please try again in a minute."
+        }), 503
+
+    return jsonify({"error": repr(last_error)[:500]}), 500
 
 
 if __name__ == "__main__":
