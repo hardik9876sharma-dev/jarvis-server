@@ -7,17 +7,22 @@ app = Flask(__name__)
 CORS(app)
 
 # Read the API key from Render's Environment Variables.
-# .get() returns None if the key is missing instead of crashing the app.
-GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+# .strip() removes spaces, and the second .strip() removes quotes
+# in case the key was pasted with "quotes" around it.
+raw_key = os.environ.get("GEMINI_API_KEY") or ""
+GEMINI_API_KEY = raw_key.strip().strip('"').strip("'").strip()
 
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
+    print("Gemini client created.", flush=True)
 else:
-    print("WARNING: GEMINI_API_KEY is not set. /chat will return an error.")
+    # flush=True makes the message show up in Render's logs right away
+    print("WARNING: GEMINI_API_KEY is not set. /chat will return an error.", flush=True)
     print(
         "Env vars that look related:",
         sorted(k for k in os.environ if "GEMINI" in k.upper() or "GOOGLE" in k.upper()),
+        flush=True,
     )
 
 
@@ -32,6 +37,21 @@ def health():
         "status": "ok",
         "message": "JARVIS Server is healthy",
         "gemini_configured": client is not None
+    })
+
+
+# TEMPORARY debug page. Shows variable NAMES and the key LENGTH only.
+# Delete this whole function once everything works.
+@app.get("/debug-env")
+def debug_env():
+    related = sorted(
+        k for k in os.environ if "GEMINI" in k.upper() or "GOOGLE" in k.upper()
+    )
+    return jsonify({
+        "related_variable_names": related,
+        "GEMINI_API_KEY_exists": "GEMINI_API_KEY" in os.environ,
+        "GEMINI_API_KEY_length": len(raw_key),
+        "total_env_variables": len(os.environ)
     })
 
 
@@ -57,7 +77,7 @@ def chat():
         return jsonify({"reply": response.text})
 
     except Exception as e:
-        print("Error:", e)
+        print("Error:", e, flush=True)
         return jsonify({"error": str(e)}), 500
 
 
