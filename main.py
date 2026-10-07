@@ -43,17 +43,16 @@ def safe_print(*args):
 
 
 def is_busy_error(error):
-    """True if Google is overloaded, we are sending too fast, or it timed out."""
+    """True if Google is overloaded, too slow, or the model is unavailable."""
     text = repr(error).lower()
-    return (
-        "503" in text
-        or "unavailable" in text
-        or "429" in text
-        or "timeout" in text
-        or "timed out" in text
-        or "404" in text      # model not available -> try the next one
-        or "not_found" in text
-    )
+    busy_words = [
+        "503", "unavailable",          # Google is busy
+        "504", "deadline",             # Google took too long
+        "429", "resource_exhausted",   # sending too fast
+        "timeout", "timed out",        # our own wait ran out
+        "404", "not_found",            # model not available
+    ]
+    return any(word in text for word in busy_words)
 
 
 # If ANY error escapes, return it as JSON instead of an HTML page.
@@ -112,7 +111,7 @@ def chat():
             last_error = e
             safe_print("GEMINI ERROR with " + model_name + ":", repr(e))
 
-            # If Google is busy or the model is unavailable, try the next model.
+            # If Google is busy or slow, try the next model.
             if is_busy_error(e):
                 continue
 
